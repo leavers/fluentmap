@@ -16,6 +16,9 @@ processing.
 
 ## Installation
 
+Fluentmap requires Python 3.8 or newer, has no runtime dependencies, and is tested
+on CPython 3.8-3.15, including the free-threaded builds (3.13t-3.15t).
+
 Fluentmap is available on [PyPI](https://pypi.org/project/fluentmap/):
 
 ```shell

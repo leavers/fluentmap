@@ -7,7 +7,11 @@ from typing import Any, Dict
 import nox
 from nox.command import CommandFailed
 from nox.sessions import Session
-from rtoml import load
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python < 3.11
+    import tomli as tomllib
 
 os.environ.update({"PDM_IGNORE_SAVED_PYTHON": "1"})
 
@@ -61,8 +65,8 @@ For more shells refer to:
 
 @lru_cache(maxsize=1)
 def get_pyproject_toml() -> Dict[str, Any]:
-    with open("pyproject.toml") as fp:
-        return load(fp)
+    with open("pyproject.toml", "rb") as fp:
+        return tomllib.load(fp)
 
 
 @lru_cache(maxsize=1)
@@ -95,6 +99,14 @@ AUTOFLAKE_VERSION = get_dev_dependencies()["autoflake"]
 MYPY_VERSION = get_dev_dependencies()["mypy"]
 RUFF_VERSION = get_dev_dependencies()["ruff"]
 SOURCES = ["fluentmap.py", "noxfile.py", "tests"]
+TEST_DEPS = (
+    "coverage[toml]",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-timeout",
+)
 
 
 @nox.session(python=False)
@@ -132,7 +144,7 @@ def clean(session: Session):
     session.run(
         "sh",
         "-c",
-        "find . | grep -E '(__pycache__|\.pyc|\.pyo$$)' | xargs rm -rf",
+        r"find . | grep -E '(__pycache__|\.pyc|\.pyo$$)' | xargs rm -rf",
     )
 
 
@@ -194,12 +206,14 @@ def test(session: Session):
 
 @nox.session(reuse_venv=True)
 def test_for_ci(session: Session):
-    session.install(
-        "coverage[toml]",
-        "pytest",
-        "pytest-asyncio",
-        "pytest-cov",
-        "pytest-mock",
-        "pytest-timeout",
-    )
+    session.install(*TEST_DEPS)
+    test(session)
+
+
+@nox.session(
+    python=["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
+    reuse_venv=True,
+)
+def test_all(session: Session):
+    session.install(*TEST_DEPS)
     test(session)

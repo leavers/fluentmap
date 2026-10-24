@@ -17,12 +17,23 @@ jobs:
     runs-on: "${{ matrix.os }}"
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version:
+          - "3.8"
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+          - "3.15"
+          - "3.13t"
+          - "3.14t"
+          - "3.15t"
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "${{ matrix.python-version }}"
 
@@ -31,7 +42,7 @@ jobs:
           python-version: "${{ matrix.python-version }}"
 
       - name: Install dependencies
-        run: pdm add -d nox rtoml
+        run: pdm add -d nox tomli
 
       - name: Run tests
         run: pdm run nox -s test_for_ci

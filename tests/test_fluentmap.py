@@ -72,6 +72,8 @@ def test_simple_map():
         [(3, 3), (4, 4), (5, 5)],
         [(6, 6)],
     ]
+    # chunk_size is ignored without an executor
+    assert list(fmap(map_func, range(4), chunk_size=2)) == list(range(4))
     # test of on_return
     assert list(fmap(map_func, (0, 1, 2), on_return=lambda x: x + 1)) == [1, 2, 3]
     # test of combination of batch_size and on_return
@@ -230,6 +232,24 @@ def test_concurrent_map():
             [(0, 0), (1, 1), (2, 2)],
             [(3, 3), (4, 4), (5, 5)],
             [(6, 6)],
+        ]
+        # test of chunk_size
+        assert list(fmap(map_func, range(6), chunk_size=2, executor=executor)) == list(
+            range(6)
+        )
+        # test of combination of batch_size and chunk_size
+        assert list(
+            fmap(
+                map_func,
+                range(7),
+                batch_size=3,
+                chunk_size=2,
+                executor=executor,
+            )
+        ) == [
+            [0, 1, 2],
+            [3, 4, 5],
+            [6],
         ]
         # test of on_return
         assert list(
