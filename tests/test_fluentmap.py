@@ -104,6 +104,12 @@ def test_simple_map():
 
     track: List[int]
 
+    def wait_for_track(value: int) -> None:
+        deadline = time.monotonic() + 1.0
+        while value not in track and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert value in track
+
     def yield_data(n: int):
         for i in range(n):
             track.append(i)
@@ -111,7 +117,7 @@ def test_simple_map():
 
     def func1(res: int):
         if res == 0:
-            time.sleep(0.15)
+            wait_for_track(1)
         track.append(-1)
         return res
 
@@ -121,7 +127,7 @@ def test_simple_map():
 
     def func2(res: int):
         if res < 2:
-            time.sleep(0.15)
+            wait_for_track(res + 2)
         track.append(-1)
         return res
 
@@ -130,8 +136,10 @@ def test_simple_map():
     assert track == [0, 1, 2, -1, 3, -1, -1, -1]
 
     def func3(res: List[int]):
-        if res == [0, 1] or res == [2, 3]:
-            time.sleep(0.15)
+        if res == [0, 1]:
+            wait_for_track(7)
+        elif res == [2, 3]:
+            wait_for_track(8)
         track.append(-1)
         return res
 
