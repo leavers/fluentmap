@@ -62,20 +62,13 @@ select = ["F401", "F841", "F601"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 
-[tool.mypy]
-check_untyped_defs = true
-follow_imports = "silent"
-ignore_missing_imports = true
-show_error_codes = true
-warn_unused_configs = true
-
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 
 [dependency-groups]
 dev = [
   "coverage[toml]>=7.6.1",
-  "mypy>=1.11.1",
+  "ty>=0.0.91",
   "nox>=2024.4.15",
   "pytest>=8.3.2",
   "pytest-asyncio>=0.23.8",

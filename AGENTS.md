@@ -36,7 +36,8 @@ dependencies - keep the code self-contained and easy for users to vendor.
 - **Build Backend**: `pdm-backend`
 - **Task Runner**: [Nox](https://nox.thea.codes/)
 - **Testing**: pytest, pytest-asyncio, pytest-cov, pytest-mock, pytest-timeout
-- **Linting**: ruff (lint + format), mypy
+- **Linting**: ruff (lint + format)
+- **Type Checking**: ty
 - **CI/CD**: GitHub Actions
 
 ## Project Structure
@@ -99,8 +100,11 @@ pdm run nox -s format_check
 ### Type Checking
 
 ```bash
-pdm run nox -s mypy
+pdm run nox -s ty
 ```
+
+Ty infers its target from `requires-python` (3.8) and supports Python 3.7-3.15.
+No project-level configuration is required.
 
 ### Cleaning
 
@@ -202,7 +206,7 @@ pdm run nox -s clean
 
 - Version is defined in `fluentmap.py` as `__version__`.
 - PDM reads it via `[tool.pdm.version]` (`source = "file"`).
-- Current version: `0.1.0`.
+- Current version: `0.1.1`.
 
 ## Dependencies
 
@@ -231,7 +235,7 @@ pdm run nox -s clean
 1. Implement in `fluentmap.py`, preserving builtin `map` semantics.
 2. Add assertions to `test_simple_map` and `test_concurrent_map` (or a new test).
 3. Run `pdm run nox -s format`.
-4. Run `pdm run nox -s mypy`.
+4. Run `pdm run nox -s ty`.
 5. Run `pdm run nox -s test`.
 
 ### Adding a Python Version
@@ -248,8 +252,8 @@ pdm run nox -s clean
 2. Commit and push the change.
 3. Tag and push:
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
 4. The publish workflow uploads to PyPI and creates a GitHub release.
 

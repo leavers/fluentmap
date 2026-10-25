@@ -95,7 +95,7 @@ def get_dev_dependencies() -> Dict[str, str]:
     return dev_deps
 
 
-MYPY_VERSION = get_dev_dependencies()["mypy"]
+TY_VERSION = get_dev_dependencies()["ty"]
 RUFF_VERSION = get_dev_dependencies()["ruff"]
 SOURCES = ["fluentmap.py", "noxfile.py", "tests"]
 TEST_DEPS = (
@@ -183,16 +183,11 @@ def format_check(session: Session, ruff: str):
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("mypy", [MYPY_VERSION])
-def mypy(session: Session, mypy: str):
-    session.install(mypy)
-    session.run("mypy", "--version")
-    session.log(
-        "If you encountered "
-        "\"AttributeError: attribute 'TypeInfo' of '_fullname' undefined\", "
-        "please try to execute `rm -rf .mypy_cache`"
-    )
-    session.run("mypy", "fluentmap.py", "noxfile.py")
+@nox.parametrize("ty", [TY_VERSION])
+def ty(session: Session, ty: str):
+    session.install(ty, "nox")
+    session.run("ty", "--version")
+    session.run("ty", "check", "fluentmap.py", "noxfile.py")
 
 
 @nox.session(python=False)

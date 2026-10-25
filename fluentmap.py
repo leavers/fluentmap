@@ -26,7 +26,7 @@ from typing import (
     runtime_checkable,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = ("Arguments", "map")
 
 
@@ -293,14 +293,14 @@ def _concurrent_chunk_map(
                     break
 
                 i, raw_result_chunk = pair
-                results: List[Tuple[Union[T, BaseException], bool]] = []
+                results: List[Tuple[Union[T, R, BaseException], bool]] = []
                 for raw_result, is_exc in raw_result_chunk:
                     if is_exc:
                         results.append((raw_result, True))
                         continue
                     try:
-                        new_result = on_return(raw_result)  # type: ignore[arg-type]
-                        results.append((new_result, False))  # type: ignore[arg-type]
+                        new_result = on_return(cast(T, raw_result))
+                        results.append((new_result, False))
                     except BaseException as exc:
                         results.append((exc, True))
                         del exc
@@ -517,7 +517,7 @@ def _concurrent_map(
 
                 i, raw_result = pair
                 try:
-                    result = on_return(raw_result)  # type: ignore[misc]
+                    result = on_return(raw_result)
                     outqueue.put((i, result, False))
                 except BaseException as exc:
                     outqueue.put((i, exc, True))
@@ -740,7 +740,7 @@ def map(
             *more_args,
             batch_size=batch_size,
             num_prepare=num_prepare,
-            on_return=on_return,  # type: ignore[arg-type]
+            on_return=on_return,
         )
 
     if chunk_size is None or chunk_size <= 1:
@@ -752,7 +752,7 @@ def map(
             batch_size=batch_size,
             num_prepare=num_prepare,
             sort_by_completion=sort_by_completion,
-            on_return=on_return,  # type: ignore[arg-type]
+            on_return=on_return,
         )
     return _concurrent_chunk_map(
         fn,
@@ -763,5 +763,5 @@ def map(
         chunk_size=chunk_size,
         num_prepare=num_prepare,
         sort_by_completion=sort_by_completion,
-        on_return=on_return,  # type: ignore[arg-type]
+        on_return=on_return,
     )
