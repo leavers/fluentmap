@@ -95,7 +95,6 @@ def get_dev_dependencies() -> Dict[str, str]:
     return dev_deps
 
 
-AUTOFLAKE_VERSION = get_dev_dependencies()["autoflake"]
 MYPY_VERSION = get_dev_dependencies()["mypy"]
 RUFF_VERSION = get_dev_dependencies()["ruff"]
 SOURCES = ["fluentmap.py", "noxfile.py", "tests"]
@@ -149,10 +148,9 @@ def clean(session: Session):
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
 @nox.parametrize("ruff", [RUFF_VERSION])
-def format(session: Session, autoflake: str, ruff: str):
-    session.install(autoflake, ruff)
+def format(session: Session, ruff: str):
+    session.install(ruff)
     try:
         session.run("taplo", "fmt", "pyproject.toml", external=True)
     except CommandFailed:
@@ -161,17 +159,16 @@ def format(session: Session, autoflake: str, ruff: str):
             "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
             "`taplo`)"
         )
-    session.run("autoflake", "--version")
-    session.run("autoflake", *SOURCES)
     session.run("ruff", "--version")
+    # shortcut: ruff has no autofix for duplicate dict keys (F601), fix manually.
+    session.run("ruff", "check", "--fix", "--unsafe-fixes", *SOURCES)
     session.run("ruff", "format", *SOURCES)
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
 @nox.parametrize("ruff", [RUFF_VERSION])
-def format_check(session: Session, autoflake: str, ruff: str):
-    session.install(autoflake, ruff)
+def format_check(session: Session, ruff: str):
+    session.install(ruff)
     try:
         session.run("taplo", "check", "pyproject.toml", external=True)
     except CommandFailed:
@@ -180,9 +177,8 @@ def format_check(session: Session, autoflake: str, ruff: str):
             "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
             "`taplo`)"
         )
-    session.run("autoflake", "--version")
-    session.run("autoflake", "--check-diff", *SOURCES)
     session.run("ruff", "--version")
+    session.run("ruff", "check", *SOURCES)
     session.run("ruff", "format", "--check", "--diff", *SOURCES)
 
 

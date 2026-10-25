@@ -5,7 +5,7 @@
 groups = ["default", "dev"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.1"
-content_hash = "sha256:34405b66d3505ab730f4f305bf44a636ea3087b037ed7390ddf9f82f74b59833"
+content_hash = "sha256:098d9e839f20e03569181a152bda7b60cdd0436fd3556897e4eadc3c71144dcf"
 
 [[metadata.targets]]
 requires_python = ">=3.8"
@@ -30,21 +30,6 @@ groups = ["dev"]
 files = [
     {file = "attrs-25.3.0-py3-none-any.whl", hash = "sha256:427318ce031701fea540783410126f03899a97ffc6f61596ad581ac2e40e3bc3"},
     {file = "attrs-25.3.0.tar.gz", hash = "sha256:75d7cefc7fb576747b2c81b4442d4d4a1ce0900973527c011d1030fd3bf4af1b"},
-]
-
-[[package]]
-name = "autoflake"
-version = "2.3.1"
-requires_python = ">=3.8"
-summary = "Removes unused imports and unused variables"
-groups = ["dev"]
-dependencies = [
-    "pyflakes>=3.0.0",
-    "tomli>=2.0.1; python_version < \"3.11\"",
-]
-files = [
-    {file = "autoflake-2.3.1-py3-none-any.whl", hash = "sha256:3ae7495db9084b7b32818b4140e6dc4fc280b712fb414f5b8fe57b0a8e85a840"},
-    {file = "autoflake-2.3.1.tar.gz", hash = "sha256:c98b75dc5b0a86459c4f01a1d32ac7eb4338ec4317a4469515ff1e687ecd909e"},
 ]
 
 [[package]]
@@ -429,17 +414,6 @@ groups = ["dev"]
 files = [
     {file = "pluggy-1.5.0-py3-none-any.whl", hash = "sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669"},
     {file = "pluggy-1.5.0.tar.gz", hash = "sha256:2cffa88e94fdc978c4c574f15f9e59b7f4201d439195c3715ca9e2486f1d0cf1"},
-]
-
-[[package]]
-name = "pyflakes"
-version = "3.2.0"
-requires_python = ">=3.8"
-summary = "passive checker of Python programs"
-groups = ["dev"]
-files = [
-    {file = "pyflakes-3.2.0-py2.py3-none-any.whl", hash = "sha256:84b5be138a2dfbb40689ca07e2152deb896a65c3a3e24c251c5c62489568074a"},
-    {file = "pyflakes-3.2.0.tar.gz", hash = "sha256:1c61603ff154621fb2a9172037d84dca3500def8c8b630657d1701f026f8af3f"},
 ]
 
 [[package]]

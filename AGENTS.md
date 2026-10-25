@@ -36,7 +36,7 @@ dependencies - keep the code self-contained and easy for users to vendor.
 - **Build Backend**: `pdm-backend`
 - **Task Runner**: [Nox](https://nox.thea.codes/)
 - **Testing**: pytest, pytest-asyncio, pytest-cov, pytest-mock, pytest-timeout
-- **Linting**: ruff, autoflake, mypy
+- **Linting**: ruff (lint + format), mypy
 - **CI/CD**: GitHub Actions
 
 ## Project Structure
@@ -89,7 +89,7 @@ pytest --cov=fluentmap.py --cov-report=term-missing tests
 ### Code Formatting
 
 ```bash
-# Format code (autoflake + ruff)
+# Format code (ruff check --fix + ruff format)
 pdm run nox -s format
 
 # Check formatting without modifying files
@@ -113,6 +113,14 @@ pdm run nox -s clean
 ### Line Length
 
 - Maximum 88 characters (configured in `pyproject.toml` under `[tool.ruff]`).
+
+### Lint Rules
+
+- Ruff's `target-version` is inferred from `requires-python` (`py38`), and the
+  same binary supports py38-py315.
+- `ruff check --fix --unsafe-fixes` removes unused imports (`F401`) and unused
+  variables (`F841`); `F401` is ignored in `__init__.py`.
+- Duplicate dict keys (`F601`) are reported but have no autofix - fix manually.
 
 ### Python 3.8 Compatibility
 
