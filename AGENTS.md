@@ -192,8 +192,9 @@ pdm run nox -s clean
 - Triggers: push to `main`, pull requests, manual dispatch.
 - Matrix: Python 3.8-3.15 plus free-threaded 3.13t, 3.14t, 3.15t on Windows,
   Ubuntu, and macOS.
-- Steps: checkout, setup Python, setup PDM, `pdm add -d nox tomli`, then
-  `pdm run nox -s test_for_ci`.
+- Steps: checkout, setup Python, `python -m pip install nox tomli`, then
+  `python -m nox -s test_for_ci`.
+- PDM is not used in CI because `setup-pdm@v4` no longer runs on Python 3.8.
 - `tomli` replaces `rtoml` because it is pure Python and has no native build for
   free-threaded interpreters.
 
