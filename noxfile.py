@@ -7,7 +7,11 @@ from typing import Any, Dict
 import nox
 from nox.command import CommandFailed
 from nox.sessions import Session
-from rtoml import load
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python < 3.11
+    import tomli as tomllib
 
 os.environ.update({"PDM_IGNORE_SAVED_PYTHON": "1"})
 
@@ -61,8 +65,8 @@ For more shells refer to:
 
 @lru_cache(maxsize=1)
 def get_pyproject_toml() -> Dict[str, Any]:
-    with open("pyproject.toml") as fp:
-        return load(fp)
+    with open("pyproject.toml", "rb") as fp:
+        return tomllib.load(fp)
 
 
 @lru_cache(maxsize=1)
@@ -91,10 +95,17 @@ def get_dev_dependencies() -> Dict[str, str]:
     return dev_deps
 
 
-AUTOFLAKE_VERSION = get_dev_dependencies()["autoflake"]
-MYPY_VERSION = get_dev_dependencies()["mypy"]
+TY_VERSION = get_dev_dependencies()["ty"]
 RUFF_VERSION = get_dev_dependencies()["ruff"]
 SOURCES = ["fluentmap.py", "noxfile.py", "tests"]
+TEST_DEPS = (
+    "coverage[toml]",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-timeout",
+)
 
 
 @nox.session(python=False)
@@ -132,15 +143,14 @@ def clean(session: Session):
     session.run(
         "sh",
         "-c",
-        "find . | grep -E '(__pycache__|\.pyc|\.pyo$$)' | xargs rm -rf",
+        r"find . | grep -E '(__pycache__|\.pyc|\.pyo$$)' | xargs rm -rf",
     )
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
 @nox.parametrize("ruff", [RUFF_VERSION])
-def format(session: Session, autoflake: str, ruff: str):
-    session.install(autoflake, ruff)
+def format(session: Session, ruff: str):
+    session.install(ruff)
     try:
         session.run("taplo", "fmt", "pyproject.toml", external=True)
     except CommandFailed:
@@ -149,17 +159,16 @@ def format(session: Session, autoflake: str, ruff: str):
             "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
             "`taplo`)"
         )
-    session.run("autoflake", "--version")
-    session.run("autoflake", *SOURCES)
     session.run("ruff", "--version")
+    # shortcut: ruff has no autofix for duplicate dict keys (F601), fix manually.
+    session.run("ruff", "check", "--fix", "--unsafe-fixes", *SOURCES)
     session.run("ruff", "format", *SOURCES)
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
 @nox.parametrize("ruff", [RUFF_VERSION])
-def format_check(session: Session, autoflake: str, ruff: str):
-    session.install(autoflake, ruff)
+def format_check(session: Session, ruff: str):
+    session.install(ruff)
     try:
         session.run("taplo", "check", "pyproject.toml", external=True)
     except CommandFailed:
@@ -168,23 +177,17 @@ def format_check(session: Session, autoflake: str, ruff: str):
             "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
             "`taplo`)"
         )
-    session.run("autoflake", "--version")
-    session.run("autoflake", "--check-diff", *SOURCES)
     session.run("ruff", "--version")
+    session.run("ruff", "check", *SOURCES)
     session.run("ruff", "format", "--check", "--diff", *SOURCES)
 
 
 @nox.session(python="3.8", reuse_venv=True)
-@nox.parametrize("mypy", [MYPY_VERSION])
-def mypy(session: Session, mypy: str):
-    session.install(mypy)
-    session.run("mypy", "--version")
-    session.log(
-        "If you encountered "
-        "\"AttributeError: attribute 'TypeInfo' of '_fullname' undefined\", "
-        "please try to execute `rm -rf .mypy_cache`"
-    )
-    session.run("mypy", "fluentmap.py", "noxfile.py")
+@nox.parametrize("ty", [TY_VERSION])
+def ty(session: Session, ty: str):
+    session.install(ty, "nox")
+    session.run("ty", "--version")
+    session.run("ty", "check", "fluentmap.py", "noxfile.py")
 
 
 @nox.session(python=False)
@@ -194,12 +197,14 @@ def test(session: Session):
 
 @nox.session(reuse_venv=True)
 def test_for_ci(session: Session):
-    session.install(
-        "coverage[toml]",
-        "pytest",
-        "pytest-asyncio",
-        "pytest-cov",
-        "pytest-mock",
-        "pytest-timeout",
-    )
+    session.install(*TEST_DEPS)
+    test(session)
+
+
+@nox.session(
+    python=["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
+    reuse_venv=True,
+)
+def test_all(session: Session):
+    session.install(*TEST_DEPS)
     test(session)

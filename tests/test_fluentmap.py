@@ -72,6 +72,8 @@ def test_simple_map():
         [(3, 3), (4, 4), (5, 5)],
         [(6, 6)],
     ]
+    # chunk_size is ignored without an executor
+    assert list(fmap(map_func, range(4), chunk_size=2)) == list(range(4))
     # test of on_return
     assert list(fmap(map_func, (0, 1, 2), on_return=lambda x: x + 1)) == [1, 2, 3]
     # test of combination of batch_size and on_return
@@ -102,6 +104,12 @@ def test_simple_map():
 
     track: List[int]
 
+    def wait_for_track(value: int) -> None:
+        deadline = time.monotonic() + 1.0
+        while value not in track and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert value in track
+
     def yield_data(n: int):
         for i in range(n):
             track.append(i)
@@ -109,7 +117,7 @@ def test_simple_map():
 
     def func1(res: int):
         if res == 0:
-            time.sleep(0.15)
+            wait_for_track(1)
         track.append(-1)
         return res
 
@@ -119,7 +127,7 @@ def test_simple_map():
 
     def func2(res: int):
         if res < 2:
-            time.sleep(0.15)
+            wait_for_track(res + 2)
         track.append(-1)
         return res
 
@@ -128,8 +136,10 @@ def test_simple_map():
     assert track == [0, 1, 2, -1, 3, -1, -1, -1]
 
     def func3(res: List[int]):
-        if res == [0, 1] or res == [2, 3]:
-            time.sleep(0.15)
+        if res == [0, 1]:
+            wait_for_track(7)
+        elif res == [2, 3]:
+            wait_for_track(8)
         track.append(-1)
         return res
 
@@ -230,6 +240,24 @@ def test_concurrent_map():
             [(0, 0), (1, 1), (2, 2)],
             [(3, 3), (4, 4), (5, 5)],
             [(6, 6)],
+        ]
+        # test of chunk_size
+        assert list(fmap(map_func, range(6), chunk_size=2, executor=executor)) == list(
+            range(6)
+        )
+        # test of combination of batch_size and chunk_size
+        assert list(
+            fmap(
+                map_func,
+                range(7),
+                batch_size=3,
+                chunk_size=2,
+                executor=executor,
+            )
+        ) == [
+            [0, 1, 2],
+            [3, 4, 5],
+            [6],
         ]
         # test of on_return
         assert list(
