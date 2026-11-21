@@ -13,6 +13,7 @@ processing.
 - Use `batch_size`/`chunk_size` to send parameters in batches/chunks.
 - Use `num_prepare` to prepare data in advance for better performance.
 - Call `on_return` hook to process the return value of each task.
+- Support the builtin `strict` keyword.
 
 ## Installation
 

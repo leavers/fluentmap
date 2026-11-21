@@ -1,7 +1,8 @@
 import random
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, List, Optional, Tuple, Type, TypeVar, Union, cast
 
 import pytest
 
@@ -75,7 +76,11 @@ def test_simple_map():
     # chunk_size is ignored without an executor
     assert list(fmap(map_func, range(4), chunk_size=2)) == list(range(4))
     # test of on_return
-    assert list(fmap(map_func, (0, 1, 2), on_return=lambda x: x + 1)) == [1, 2, 3]
+    assert list(fmap(map_func, (0, 1, 2), on_return=lambda x: cast(Any, x) + 1)) == [
+        1,
+        2,
+        3,
+    ]
     # test of combination of batch_size and on_return
     assert list(
         fmap(
@@ -261,7 +266,12 @@ def test_concurrent_map():
         ]
         # test of on_return
         assert list(
-            fmap(map_func, (0, 1, 2), executor=executor, on_return=lambda x: x + 1)
+            fmap(
+                map_func,
+                (0, 1, 2),
+                executor=executor,
+                on_return=lambda x: cast(Any, x) + 1,
+            )
         ) == [1, 2, 3]
         # test of combination of batch_size and on_return
         assert list(
@@ -301,7 +311,7 @@ def test_concurrent_map():
                 [Arguments(i, wait_time=0.4 - 0.2 * i) for i in range(3)],
                 executor=executor,
                 sort_by_completion=True,
-                on_return=lambda x: x + 1,
+                on_return=lambda x: cast(Any, x) + 1,
             )
         ) == [3, 2, 1]
         # test integrity of high-concurrency situation
@@ -310,6 +320,31 @@ def test_concurrent_map():
                 map_func,
                 [Arguments(i, wait_time=random.random()) for i in range(1024)],
                 executor=executor,
-                on_return=lambda x: x + 1,
+                on_return=lambda x: cast(Any, x) + 1,
             )
         ) == list(range(1, 1025))
+
+
+def test_strict():
+    # equal lengths behave as usual
+    assert list(fmap(map_func, (0, 1), (2, 3), strict=True)) == [(0, 2), (1, 3)]
+    # strict has no effect with a single iterable
+    assert list(fmap(map_func, (0, 1), strict=True)) == [0, 1]
+    # strict=False keeps the shortest-iterable behavior
+    assert list(fmap(map_func, (0, 1), (2,), strict=False)) == [(0, 2)]
+
+    def check_mismatch(**kwargs):
+        with pytest.raises(ValueError) as excinfo:
+            list(fmap(map_func, (0, 1), (2,), strict=True, **kwargs))
+        assert str(excinfo.value) == "map() argument 2 is shorter than argument 1"
+        if sys.version_info >= (3, 14):
+            with pytest.raises(ValueError) as builtin_excinfo:
+                list(map(map_func, (0, 1), (2,), strict=True))
+            assert str(excinfo.value) == str(builtin_excinfo.value)
+
+    check_mismatch()
+    check_mismatch(num_prepare=1)
+    check_mismatch(batch_size=2)
+    with ThreadPoolExecutor() as executor:
+        check_mismatch(executor=executor)
+        check_mismatch(executor=executor, chunk_size=2)
