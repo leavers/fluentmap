@@ -2,16 +2,13 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any
 
 import nox
 from nox.command import CommandFailed
 from nox.sessions import Session
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # Python < 3.11
-    import tomli as tomllib
+import tomllib
 
 os.environ.update({"PDM_IGNORE_SAVED_PYTHON": "1"})
 
@@ -64,7 +61,7 @@ For more shells refer to:
 
 
 @lru_cache(maxsize=1)
-def get_pyproject_toml() -> Dict[str, Any]:
+def get_pyproject_toml() -> dict[str, Any]:
     with open("pyproject.toml", "rb") as fp:
         return tomllib.load(fp)
 
@@ -79,10 +76,10 @@ def get_python_version() -> str:
 
 
 @lru_cache(maxsize=1)
-def get_dev_dependencies() -> Dict[str, str]:
+def get_dev_dependencies() -> dict[str, str]:
     pyproject = get_pyproject_toml()
     pat = re.compile(r"[ <>~=]")
-    dev_deps: Dict[str, str] = {}
+    dev_deps: dict[str, str] = {}
     for dep in pyproject["dependency-groups"]["dev"]:
         sep = -1
         for m in pat.finditer(dep):
@@ -147,7 +144,7 @@ def clean(session: Session):
     )
 
 
-@nox.session(python="3.8", reuse_venv=True)
+@nox.session(python="3.11", reuse_venv=True)
 @nox.parametrize("ruff", [RUFF_VERSION])
 def format(session: Session, ruff: str):
     session.install(ruff)
@@ -165,7 +162,7 @@ def format(session: Session, ruff: str):
     session.run("ruff", "format", *SOURCES)
 
 
-@nox.session(python="3.8", reuse_venv=True)
+@nox.session(python="3.11", reuse_venv=True)
 @nox.parametrize("ruff", [RUFF_VERSION])
 def format_check(session: Session, ruff: str):
     session.install(ruff)
@@ -182,7 +179,7 @@ def format_check(session: Session, ruff: str):
     session.run("ruff", "format", "--check", "--diff", *SOURCES)
 
 
-@nox.session(python="3.8", reuse_venv=True)
+@nox.session(python="3.11", reuse_venv=True)
 @nox.parametrize("ty", [TY_VERSION])
 def ty(session: Session, ty: str):
     session.install(ty, "nox")
@@ -202,7 +199,7 @@ def test_for_ci(session: Session):
 
 
 @nox.session(
-    python=["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
+    python=["3.11", "3.12", "3.13", "3.14", "3.15"],
     reuse_venv=True,
 )
 def test_all(session: Session):

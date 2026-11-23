@@ -6,28 +6,24 @@ Copyright (c) 2020-2024, Leavers.
 License: MIT
 """
 
-from queue import Empty, Queue
-from threading import Event, Thread
-from typing import (
-    Any,
+import asyncio
+import inspect
+import os
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
     Callable,
-    Dict,
     Iterable,
     Iterator,
-    List,
-    Optional,
-    Protocol,
-    Set,
-    Tuple,
-    TypeVar,
-    Union,
-    cast,
-    overload,
-    runtime_checkable,
 )
+from concurrent.futures import Future as ConcurrentFuture
+from queue import Empty, Queue
+from threading import Event, Thread
+from typing import Any, Protocol, TypeVar, cast, overload, runtime_checkable
 
-__version__ = "0.1.2"
-__all__ = ("Arguments", "map")
+__version__ = "0.2.0"
+__all__ = ("Arguments", "amap", "map")
 
 
 T = TypeVar("T")
@@ -61,11 +57,238 @@ class Arguments:
         return f"{self.__class__.__name__}(args={self.args}, kwargs={self.kwargs})"
 
 
+def _is_async_callable(fn: Any) -> bool:
+    if inspect.iscoroutinefunction(fn):
+        return True
+    # inspect.iscoroutinefunction() does not look at __call__, so callable objects
+    # with an async __call__ need a second check.
+    call = getattr(fn, "__call__", None)
+    return call is not None and inspect.iscoroutinefunction(call)
+
+
+AnyIterable = Iterable[Any] | AsyncIterable[Any]
+
+
+async def _anext(iterator: Any, is_async: bool) -> Any:
+    if is_async:
+        return await iterator.__anext__()
+    try:
+        return next(iterator)
+    except StopIteration:
+        raise StopAsyncIteration from None
+
+
+async def _aiter_args(
+    args: AnyIterable,
+    *more_args: AnyIterable,
+    strict: bool = False,
+) -> AsyncIterator[tuple[Any, ...]]:
+    sources: list[tuple[Any, bool]] = []
+    async_iterators: list[AsyncIterator[Any]] = []
+    for source in (args, *more_args):
+        if isinstance(source, AsyncIterable):
+            iterator = source.__aiter__()
+            async_iterators.append(iterator)
+            sources.append((iterator, True))
+        else:
+            sources.append((iter(cast(Iterable[Any], source)), False))
+
+    try:
+        if not strict:
+            while True:
+                values = []
+                for iterator, is_async in sources:
+                    try:
+                        values.append(await _anext(iterator, is_async))
+                    except StopAsyncIteration:
+                        return
+                yield tuple(values)
+        else:
+            # Same checks and messages as the strict builtin map, except for the
+            # function name.
+            while True:
+                values = []
+                for i, (iterator, is_async) in enumerate(sources):
+                    try:
+                        values.append(await _anext(iterator, is_async))
+                    except StopAsyncIteration:
+                        if i:
+                            plural = " " if i == 1 else "s 1-"
+                            raise ValueError(
+                                f"amap() argument {i + 1} is shorter than "
+                                f"argument{plural}{i}"
+                            ) from None
+                        for j, (other, other_is_async) in enumerate(
+                            sources[1:], start=1
+                        ):
+                            try:
+                                await _anext(other, other_is_async)
+                            except StopAsyncIteration:
+                                continue
+                            plural = " " if j == 1 else "s 1-"
+                            raise ValueError(
+                                f"amap() argument {j + 1} is longer than "
+                                f"argument{plural}{j}"
+                            ) from None
+                        return
+                yield tuple(values)
+    finally:
+        for iterator in async_iterators:
+            aclose = getattr(iterator, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except Exception:
+                pass
+
+
+async def _amap(
+    fn: Callable[..., Any],
+    args: AnyIterable,
+    more_args: tuple[AnyIterable, ...],
+    executor: SupportsSubmit | None,
+    batch_size: int,
+    chunk_size: int,
+    window: int,
+    sort_by_completion: bool,
+    on_return: Callable[[Any], Any] | None,
+    strict: bool,
+    is_async_fn: bool,
+) -> AsyncIterator[Any]:
+    is_batch_args = batch_size > 1
+    extract_args = bool(more_args)
+    source = _aiter_args(args, *more_args, strict=strict)
+    queue: asyncio.Queue = asyncio.Queue()
+    inflight: set[asyncio.Task] = set()
+    results: dict[int, Any] = {}
+    next_submit = 0
+    next_yield = 0
+    has_more = True
+    batch: list[Any] = []
+    chunk: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def make_payload(
+        fn_args: Any,
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        if is_batch_args:
+            return ((fn_args,), {})
+        if isinstance(fn_args, Arguments):
+            return (fn_args.args, fn_args.kwargs)
+        if extract_args and isinstance(fn_args, Iterable):
+            return (tuple(fn_args), {})
+        return ((fn_args,), {})
+
+    async def call(call_args: tuple[Any, ...], call_kwargs: dict[str, Any]) -> Any:
+        if is_async_fn:
+            result = await fn(*call_args, **call_kwargs)
+        elif executor is None:
+            result = await asyncio.to_thread(fn, *call_args, **call_kwargs)
+        else:
+            future = executor.submit(fn, *call_args, **call_kwargs)
+            if isinstance(future, asyncio.Future):
+                result = await cast(Awaitable[Any], future)
+            elif isinstance(future, ConcurrentFuture):
+                result = await asyncio.wrap_future(
+                    cast("ConcurrentFuture[Any]", future)
+                )
+            else:
+                result = await asyncio.to_thread(future.result)
+        if inspect.isawaitable(result):
+            result = await cast(Awaitable[Any], result)
+        return result
+
+    async def run_task(
+        indices: list[int],
+        payloads: list[tuple[tuple[Any, ...], dict[str, Any]]],
+    ) -> None:
+        try:
+            entries: list[tuple[int, Any]] = []
+            for index, (call_args, call_kwargs) in zip(indices, payloads):
+                try:
+                    value = await call(call_args, call_kwargs)
+                    if on_return is not None:
+                        value = on_return(value)
+                        if inspect.isawaitable(value):
+                            value = await cast(Awaitable[Any], value)
+                except BaseException as exc:
+                    queue.put_nowait((None, exc))
+                    return
+                entries.append((index, value))
+            queue.put_nowait((entries, None))
+        finally:
+            inflight.discard(asyncio.current_task())
+
+    def submit_chunk(
+        payloads: list[tuple[tuple[Any, ...], dict[str, Any]]],
+    ) -> None:
+        nonlocal next_submit
+        indices = list(range(next_submit, next_submit + len(payloads)))
+        next_submit += len(payloads)
+        task = asyncio.create_task(run_task(indices, list(payloads)))
+        inflight.add(task)
+
+    try:
+        while has_more or next_yield < next_submit:
+            while has_more and (window == 0 or len(inflight) + len(results) < window):
+                try:
+                    fn_args = await source.__anext__()
+                    if not extract_args:
+                        fn_args = fn_args[0]
+                except StopAsyncIteration:
+                    has_more = False
+                    if is_batch_args and batch:
+                        chunk.append(make_payload(batch))
+                        batch = []
+                    if chunk:
+                        submit_chunk(chunk)
+                        chunk = []
+                    break
+
+                if is_batch_args:
+                    batch.append(fn_args)
+                    if len(batch) < batch_size:
+                        continue
+                    chunk.append(make_payload(batch))
+                    batch = []
+                else:
+                    chunk.append(make_payload(fn_args))
+
+                if chunk_size <= 1 or len(chunk) >= chunk_size:
+                    submit_chunk(chunk)
+                    chunk = []
+
+            if not inflight and next_yield >= next_submit:
+                break
+
+            entries, error = await queue.get()
+            if error is not None:
+                raise error
+            for index, value in entries:
+                if sort_by_completion:
+                    next_yield += 1
+                    yield value
+                else:
+                    results[index] = value
+                    while next_yield in results:
+                        yield results.pop(next_yield)
+                        next_yield += 1
+    finally:
+        pending = list(inflight)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        close_source = getattr(source, "aclose", None)
+        if close_source is not None:
+            await close_source()
+
+
 def _zip_args(
     args: Iterable[Any],
     *more_args: Iterable[Any],
     strict: bool = False,
-) -> Iterator[Tuple[Any, ...]]:
+) -> Iterator[tuple[Any, ...]]:
     if not strict:
         yield from zip(args, *more_args)
         return
@@ -103,9 +326,9 @@ def _simple_map(
     *more_args: Iterable[Any],
     batch_size: int = 0,
     num_prepare: int = 0,
-    on_return: Optional[Callable[[T], R]] = None,
+    on_return: Callable[[T], R] | None = None,
     strict: bool = False,
-) -> Iterator[Union[T, R]]:
+) -> Iterator[T | R]:
     is_batch_args = True if batch_size > 1 else False
 
     if more_args:
@@ -115,7 +338,7 @@ def _simple_map(
         iterable_args = args
         extract_args = False
 
-    def submit(fn_args: Union[Arguments, Iterable[Any], Any]) -> Union[T, R]:
+    def submit(fn_args: Arguments | Iterable[Any] | Any) -> T | R:
         if is_batch_args:
             res = fn(fn_args)
         else:
@@ -130,7 +353,7 @@ def _simple_map(
         return on_return(res)
 
     if num_prepare == 0:
-        batch: List[Any] = []
+        batch: list[Any] = []
         for args in iterable_args:
             if is_batch_args:
                 batch.append(args)
@@ -146,10 +369,10 @@ def _simple_map(
         undefined = object()
         queue: Queue = Queue()
         exc_event = Event()
-        worker_exc: List[BaseException] = []
+        worker_exc: list[BaseException] = []
 
         def worker():
-            batch: List[Any] = []
+            batch: list[Any] = []
             try:
                 for args in iterable_args:
                     if exc_event.is_set():
@@ -198,12 +421,12 @@ def _simple_map(
 
 def _process_chunk(
     fn: Callable,
-    fn_args_chunk: List[Union[Arguments, Iterable[Any], Any]],
+    fn_args_chunk: list[Arguments | Iterable[Any] | Any],
     *,
     extract_args: bool,
     is_batch_args: bool,
-) -> List[Tuple[Any, bool]]:
-    result: List[Tuple[Any, bool]] = []
+) -> list[tuple[Any, bool]]:
+    result: list[tuple[Any, bool]] = []
     if is_batch_args:
         for fn_args in fn_args_chunk:
             try:
@@ -237,9 +460,9 @@ def _concurrent_chunk_map(
     batch_size: int = 0,
     num_prepare: int = 0,
     sort_by_completion: bool = False,
-    on_return: Optional[Callable[[T], R]] = None,
+    on_return: Callable[[T], R] | None = None,
     strict: bool = False,
-) -> Iterator[Union[T, R]]:
+) -> Iterator[T | R]:
     assert chunk_size > 1
     is_batch_args = True if batch_size > 1 else False
 
@@ -257,7 +480,7 @@ def _concurrent_chunk_map(
         extract_args = False
 
     # Indicates the chunk currently being assembled
-    chunk: List[Any] = []
+    chunk: list[Any] = []
 
     # The chunk sequence number which is auto-incremental and unique.
     chunk_cursor = 0
@@ -265,17 +488,17 @@ def _concurrent_chunk_map(
     # Indicates the batch currently being assembled. If batch_size is 0, the length
     # of batch will only be 1 and will be deconstructed before being added to
     # pending_batches.
-    batch: List[Any] = []
+    batch: list[Any] = []
 
     # Batch cursors which have been submitted but not yielded yet.
-    task_indices: Set[int] = set()
+    task_indices: set[int] = set()
 
     # Futures which have not been yielded.
-    futures: Dict[int, FutureLike[List[Tuple[Union[T, BaseException], bool]]]] = {}
+    futures: dict[int, FutureLike[list[tuple[T | BaseException, bool]]]] = {}
 
     # Store results when sort_by_completion is False to make sure results are returned
     # in the order of submission.
-    result_cache: Dict[int, List[Tuple[Union[T, BaseException], bool]]] = {}
+    result_cache: dict[int, list[tuple[T | BaseException, bool]]] = {}
 
     # Used to reorder results and communicate with handle_result.
     result_queue: Queue = Queue()
@@ -289,8 +512,8 @@ def _concurrent_chunk_map(
     result_cursor_bound = 0
 
     def submit(
-        fn_args_chunk: List[Union[Arguments, Iterable[Any], Any]],
-    ) -> FutureLike[List[Tuple[Union[T, BaseException], bool]]]:
+        fn_args_chunk: list[Arguments | Iterable[Any] | Any],
+    ) -> FutureLike[list[tuple[T | BaseException, bool]]]:
         return executor.submit(
             _process_chunk,
             fn,
@@ -303,7 +526,7 @@ def _concurrent_chunk_map(
 
         def handle_result_chunk(
             i: int,
-            result_chunk: List[Tuple[Union[T, BaseException], bool]],
+            result_chunk: list[tuple[T | BaseException, bool]],
         ) -> None:
             nonlocal result_cursor, result_cursor_bound
 
@@ -328,9 +551,9 @@ def _concurrent_chunk_map(
         def handle_result_concurrently(inqueue: Queue, outqueue: Queue) -> None:
             while True:
                 try:
-                    pair: Optional[
-                        Tuple[int, List[Tuple[Union[T, BaseException], bool]]]
-                    ] = inqueue.get(timeout=0.01)
+                    pair: tuple[int, list[tuple[T | BaseException, bool]]] | None = (
+                        inqueue.get(timeout=0.01)
+                    )
                 except Empty:
                     continue
 
@@ -338,7 +561,7 @@ def _concurrent_chunk_map(
                     break
 
                 i, raw_result_chunk = pair
-                results: List[Tuple[Union[T, R, BaseException], bool]] = []
+                results: list[tuple[T | R | BaseException, bool]] = []
                 for raw_result, is_exc in raw_result_chunk:
                     if is_exc:
                         results.append((raw_result, True))
@@ -355,7 +578,7 @@ def _concurrent_chunk_map(
                 del pair
 
         raw_result_queue: Queue = Queue()
-        result_handler: Optional[Thread] = None
+        result_handler: Thread | None = None
 
         def stop_result_handler() -> None:
             nonlocal result_handler
@@ -367,7 +590,7 @@ def _concurrent_chunk_map(
 
         def handle_result_chunk(
             i: int,
-            result_chunk: List[Tuple[Union[T, BaseException], bool]],
+            result_chunk: list[tuple[T | BaseException, bool]],
         ) -> None:
             nonlocal result_handler, result_cache
             nonlocal result_cursor, result_cursor_bound
@@ -437,7 +660,7 @@ def _concurrent_chunk_map(
                     has_args = False
 
             if futures:
-                finished_indices: List[int] = []
+                finished_indices: list[int] = []
                 for i, future in futures.items():
                     if not future.done():
                         continue
@@ -467,9 +690,9 @@ def _concurrent_map(
     batch_size: int = 0,
     num_prepare: int = 0,
     sort_by_completion: bool = False,
-    on_return: Optional[Callable[[T], R]] = None,
+    on_return: Callable[[T], R] | None = None,
     strict: bool = False,
-) -> Iterator[Union[T, R]]:
+) -> Iterator[T | R]:
     is_batch_args = True if batch_size > 1 else False
 
     args_iter: Iterator[Any]
@@ -488,20 +711,20 @@ def _concurrent_map(
     # Indicates the batch currently being assembled. If batch_size is 0, the length
     # of batch will only be 1 and will be deconstructed before being added to
     # pending_batches.
-    batch: List[Any] = []
+    batch: list[Any] = []
 
     # The batch sequence number which is auto-incremental and unique.
     batch_cursor = 0
 
     # Batch cursors which have been submitted but not yielded yet.
-    task_indices: Set[int] = set()
+    task_indices: set[int] = set()
 
     # Futures which have not been yielded.
-    futures: Dict[int, FutureLike[T]] = {}
+    futures: dict[int, FutureLike[T]] = {}
 
     # Store results when sort_by_completion is False to make sure results are returned
     # in the order of submission.
-    result_cache: Dict[int, T] = {}
+    result_cache: dict[int, T] = {}
 
     # Used to reorder results and communicate with handle_result.
     result_queue: Queue = Queue()
@@ -515,7 +738,7 @@ def _concurrent_map(
     result_cursor_bound = 0
 
     def submit(
-        fn_args: Union[Arguments, Iterable[Any], Any],
+        fn_args: Arguments | Iterable[Any] | Any,
     ) -> FutureLike[T]:
         if is_batch_args:
             future = executor.submit(fn, fn_args)
@@ -554,7 +777,7 @@ def _concurrent_map(
         def handle_result_concurrently(inqueue: Queue, outqueue: Queue) -> None:
             while True:
                 try:
-                    pair: Optional[Tuple[int, T]] = inqueue.get(timeout=0.01)
+                    pair: tuple[int, T] | None = inqueue.get(timeout=0.01)
                 except Empty:
                     continue
 
@@ -572,7 +795,7 @@ def _concurrent_map(
                     del raw_result, pair
 
         raw_result_queue: Queue = Queue()
-        result_handler: Optional[Thread] = None
+        result_handler: Thread | None = None
 
         def stop_result_handler() -> None:
             nonlocal result_handler
@@ -641,7 +864,7 @@ def _concurrent_map(
                     has_args = False
 
             if futures:
-                finished_indices: List[int] = []
+                finished_indices: list[int] = []
                 for i, future in futures.items():
                     if not future.done():
                         continue
@@ -667,10 +890,10 @@ def map(
     fn: Callable[..., T],
     args: Iterable[Any],
     *more_args: Iterable[Any],
-    executor: Optional[SupportsSubmit] = None,
-    batch_size: Optional[int] = None,
-    chunk_size: Optional[int] = None,
-    num_prepare: Optional[int] = None,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
     sort_by_completion: bool = False,
     strict: bool = False,
 ) -> Iterator[T]: ...
@@ -681,10 +904,10 @@ def map(
     fn: Callable[..., T],
     args: Iterable[Any],
     *more_args: Iterable[Any],
-    executor: Optional[SupportsSubmit] = None,
-    batch_size: Optional[int] = None,
-    chunk_size: Optional[int] = None,
-    num_prepare: Optional[int] = None,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
     sort_by_completion: bool = False,
     on_return: Callable[[T], R],
     strict: bool = False,
@@ -695,14 +918,14 @@ def map(
     fn: Callable[..., T],
     args: Iterable[Any],
     *more_args: Iterable[Any],
-    executor: Optional[SupportsSubmit] = None,
-    batch_size: Optional[int] = None,
-    chunk_size: Optional[int] = None,
-    num_prepare: Optional[int] = None,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
     sort_by_completion: bool = False,
-    on_return: Optional[Callable[[T], R]] = None,
+    on_return: Callable[[T], R] | None = None,
     strict: bool = False,
-) -> Iterator[Union[T, R]]:
+) -> Iterator[T | R]:
     """Drop-in replacement of builtin ``map`` but adds an argument ``executor`` for
     executing function in an executor.
 
@@ -783,6 +1006,10 @@ def map(
                 "Positional arguments after function should be iterable, "
                 f"got {fn_args} ({type(fn_args)}) instead."
             )
+    if _is_async_callable(fn):
+        raise TypeError("map() does not support async functions, use amap() instead")
+    if on_return is not None and _is_async_callable(on_return):
+        raise TypeError("map() does not support async on_return, use amap() instead")
     if batch_size is None or batch_size <= 1:
         batch_size = 0
     if num_prepare is None or num_prepare <= 0:
@@ -822,4 +1049,136 @@ def map(
         sort_by_completion=sort_by_completion,
         on_return=on_return,
         strict=strict,
+    )
+
+
+@overload
+def amap(
+    fn: Callable[..., T | Awaitable[T]],
+    args: AnyIterable,
+    *more_args: AnyIterable,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
+    sort_by_completion: bool = False,
+    strict: bool = False,
+) -> AsyncIterator[T]: ...
+
+
+@overload
+def amap(
+    fn: Callable[..., T | Awaitable[T]],
+    args: AnyIterable,
+    *more_args: AnyIterable,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
+    sort_by_completion: bool = False,
+    on_return: Callable[[T], R | Awaitable[R]],
+    strict: bool = False,
+) -> AsyncIterator[R]: ...
+
+
+def amap(
+    fn: Callable[..., T | Awaitable[T]],
+    args: AnyIterable,
+    *more_args: AnyIterable,
+    executor: SupportsSubmit | None = None,
+    batch_size: int | None = None,
+    chunk_size: int | None = None,
+    num_prepare: int | None = None,
+    sort_by_completion: bool = False,
+    on_return: Callable[[T], R | Awaitable[R]] | None = None,
+    strict: bool = False,
+) -> AsyncIterator[T | R]:
+    """Asynchronous counterpart of :func:`map`.
+
+    Unlike :func:`map`, ``fn`` may be either a synchronous or an asynchronous
+    function. Synchronous functions are executed in the default thread pool (or in
+    ``executor`` when given), while asynchronous functions are awaited directly on
+    the running event loop. It is also possible to pass asynchronous iterables.
+
+    :type fn: Callable[..., T | Awaitable[T]]
+    :param fn: The function to be mapped. It may return either a value or an
+        awaitable.
+
+    :type args: Iterable[Any] | AsyncIterable[Any]
+    :param args: The arguments to be mapped into ``fn``. Positional arguments after
+        the function may be synchronous iterables, asynchronous iterables, or any
+        mix of both.
+
+    :type executor: SupportsSubmit, optional, default to ``None``
+    :param executor: The executor used for synchronous ``fn``. Any object with a
+        method ``submit(fn, *args, **kwargs) -> Future`` is accepted. ``executor``
+        is ignored when ``fn`` is an asynchronous function. The default value is
+        ``None``, which means to use the event loop's default thread pool.
+
+    :type batch_size: int, optional, default to ``None``
+    :param batch_size: Same as :func:`map`.
+
+    :type chunk_size: int, optional, default to ``None``
+    :param chunk_size: Same as :func:`map`, except that it also takes effect when
+        ``executor`` is ``None``.
+
+    :type num_prepare: int, optional, default to ``None``
+    :param num_prepare: Maximum number of tasks that are allowed to be in flight at
+        the same time. If set to ``None``, a default window of
+        ``min(32, cpu_count + 4)`` is used. ``0`` means no limit. A negative value
+        raises ``ValueError``.
+
+    :type sort_by_completion: bool, default to ``False``
+    :param sort_by_completion: If set to ``True``, results are yielded in the order
+        of completion. Otherwise they are yielded in submission order.
+
+    :type on_return: Callable[[T], R | Awaitable[R]], optional, default to ``None``
+    :param on_return: An optional callback invoked on each result. It may be a
+        synchronous or an asynchronous function. When ``chunk_size`` is used, it
+        is invoked once per item instead of once per chunk.
+
+    :type strict: bool, optional, default to ``False``
+    :param strict: If set to ``True``, raise ``ValueError`` when the iterables have
+        different lengths. The error messages use the ``amap()`` prefix.
+
+    :rtype: AsyncIterator
+    :return: An asynchronous iterator yielding all results of ``fn``.
+
+    .. note::
+        Results are yielded fail-fast: the first task that raises an exception
+        cancels all in-flight tasks and the exception is re-raised from the
+        iterator. Breaking out of ``async for`` does not close the iterator
+        automatically; use ``contextlib.aclosing()`` or call ``aclose()`` to cancel
+        pending tasks and close asynchronous iterables.
+    """
+
+    for fn_args in (args, *more_args):
+        if not isinstance(fn_args, (Iterable, AsyncIterable)):
+            raise TypeError(
+                "Positional arguments after function should be iterable, "
+                f"got {fn_args} ({type(fn_args)}) instead."
+            )
+    if batch_size is None or batch_size <= 1:
+        batch_size = 0
+    if chunk_size is None or chunk_size <= 1:
+        chunk_size = 0
+    if num_prepare is None:
+        window = min(32, (os.cpu_count() or 1) + 4)
+    elif num_prepare < 0:
+        raise ValueError("num_prepare must be greater than or equal to 0")
+    else:
+        window = num_prepare
+
+    return _amap(
+        fn,
+        args,
+        more_args,
+        executor=executor,
+        batch_size=batch_size,
+        chunk_size=chunk_size,
+        window=window,
+        sort_by_completion=sort_by_completion,
+        on_return=on_return,
+        strict=strict,
+        is_async_fn=_is_async_callable(fn),
     )
