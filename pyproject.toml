@@ -11,9 +11,6 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -24,7 +21,7 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = []
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 dynamic = ["version"]
@@ -64,6 +61,7 @@ select = ["F401", "F841", "F601"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [
@@ -76,5 +74,4 @@ dev = [
   "pytest-mock>=3.14.0",
   "pytest-timeout>=2.3.1",
   "ruff>=0.6.1",
-  "tomli>=2.0.1",
 ]

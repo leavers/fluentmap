@@ -10,6 +10,7 @@ processing.
 ## Features
 
 - Use `executor` to run tasks in parallel.
+- Use `amap` to await synchronous or asynchronous functions with `async for`.
 - Use `batch_size`/`chunk_size` to send parameters in batches/chunks.
 - Use `num_prepare` to prepare data in advance for better performance.
 - Call `on_return` hook to process the return value of each task.
@@ -17,8 +18,8 @@ processing.
 
 ## Installation
 
-Fluentmap requires Python 3.8 or newer, has no runtime dependencies, and is tested
-on CPython 3.8-3.15, including the free-threaded builds (3.13t-3.15t).
+Fluentmap requires Python 3.11 or newer, has no runtime dependencies, and is tested
+on CPython 3.11-3.15, including the free-threaded builds (3.13t-3.15t).
 
 Fluentmap is available on [PyPI](https://pypi.org/project/fluentmap/):
 
@@ -33,12 +34,12 @@ pip install fluentmap
 You can start to use fluentmap just like built-in `map`:
 
 ```python
-from typing import Any, List
+from typing import Any
 
 from fluentmap import map
 
 
-items: List[str] = [...]
+items: list[str] = [...]
 
 
 def heavy_task(item: str) -> Any:
@@ -84,7 +85,7 @@ them to executor workers, while workers still process each argument sequentially
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, List
+from typing import Any
 
 from fluentmap import map
 
@@ -92,7 +93,7 @@ from fluentmap import map
 # ......
 
 
-def heavy_task_in_batch(item: List[str]) -> Any:
+def heavy_task_in_batch(item: list[str]) -> Any:
     """Note that `item` is a list since when `batch_size` is set,
     fluentmap will concatenate multiple items into a batch before sending them to
     the function which is to be invoked.
@@ -118,3 +119,48 @@ with ProcessPoolExecutor() as executor:
         chunk_size=32,
     ):
         postprocessing(result)
+```
+
+### Async processing
+
+Use `amap` when the work is asynchronous. Its signature is the same as `map`, but
+`fn` may be a regular function or an `async def` function, and the input may be
+any mix of synchronous and asynchronous iterables.
+
+```python
+import asyncio
+import contextlib
+from typing import Any
+
+from fluentmap import amap
+
+
+items: list[str] = [...]
+
+
+async def fetch(item: str) -> Any:
+    """Suppose this function performs an asynchronous request."""
+
+
+async def main() -> None:
+    async with contextlib.aclosing(amap(fetch, items)) as results:
+        async for result in results:
+            postprocessing(result)
+
+
+asyncio.run(main())
+```
+
+`amap` is a coroutine-based scheduler: asynchronous functions are awaited directly,
+while synchronous functions run in the event loop's default thread pool or in
+`executor` when one is given. It accepts the same `batch_size`, `chunk_size`,
+`num_prepare`, `sort_by_completion`, `on_return` and `strict` options as `map`.
+`num_prepare` defaults to `min(32, cpu_count + 4)` in-flight tasks; set it to `0`
+to remove the limit. `map` itself rejects async functions and async `on_return`
+with a `TypeError` pointing to `amap`.
+
+Results are yielded in submission order, or in completion order with
+`sort_by_completion=True`. The first exception cancels all pending tasks and is
+re-raised from the iterator. Breaking out of `async for` does not close the
+iterator automatically, so use `contextlib.aclosing()` or call `aclose()` to cancel
+pending work and close asynchronous iterables.
